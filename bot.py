@@ -10,6 +10,7 @@ Open-source — configure via .env for any learning centre.
 
 import os
 import json
+import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -866,6 +867,14 @@ def main():
     ))
 
     print("✅ Bot is running! Press Ctrl+C to stop.")
+
+    # Ensure event loop exists (required for Python 3.12+ / Render)
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     app.run_polling(drop_pending_updates=True)
 
 
