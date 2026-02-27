@@ -838,6 +838,35 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ========================================
 
+def start_health_server():
+    """Start a minimal HTTP server for Render's free Web Service port check."""
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import threading
+
+    port = int(os.getenv("PORT", 10000))
+
+    class HealthHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            data = load_data()
+            self.wfile.write(json.dumps({
+                "status": "running",
+                "bot": CENTRE_NAME,
+                "pending": count_pending(data),
+                "total": data["stats"]["total"],
+            }).encode())
+
+        def log_message(self, format, *args):
+            pass  # Suppress access logs
+
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"🌐 Health server on port {port}")
+
+
 def main():
     """Start the bot."""
     if not BOT_TOKEN:
@@ -845,6 +874,9 @@ def main():
         return
 
     print(f"🤖 {CENTRE_NAME} Bot starting...")
+
+    # Start health check server (for Render free Web Service)
+    start_health_server()
 
     app = Application.builder().token(BOT_TOKEN).build()
 
