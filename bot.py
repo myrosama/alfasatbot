@@ -15,7 +15,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    KeyboardButton,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -70,21 +77,28 @@ def count_pending(data: dict) -> int:
     )
 
 
-def main_student_keyboard() -> InlineKeyboardMarkup:
-    """Main menu keyboard for students."""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📝 Ask a Question", callback_data="ask_start")],
-    ])
+# --- Reply Keyboard Buttons (bottom of screen) ---
+BTN_ASK = "📝 Ask a Question"
+BTN_SEND = "✅ Send Question"
+BTN_CANCEL = "❌ Cancel"
 
 
-def composing_keyboard() -> InlineKeyboardMarkup:
+def main_student_keyboard() -> ReplyKeyboardMarkup:
+    """Main menu keyboard for students — sits at bottom of screen."""
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(BTN_ASK)]],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+def composing_keyboard() -> ReplyKeyboardMarkup:
     """Keyboard shown while student is composing a question."""
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Send Question", callback_data="ask_finish"),
-            InlineKeyboardButton("❌ Cancel", callback_data="ask_cancel"),
-        ],
-    ])
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(BTN_SEND), KeyboardButton(BTN_CANCEL)]],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
 
 
 def teacher_question_keyboard(q_id: str) -> InlineKeyboardMarkup:
@@ -187,22 +201,16 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========================================
 
 async def start_composing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Put student into composing mode."""
-    query = update.callback_query
-    await query.answer()
-
-    # Initialize compose buffer
+    """Put student into composing mode — triggered by reply keyboard button."""
     context.user_data["composing"] = True
     context.user_data["compose_parts"] = []
 
-    await query.edit_message_reply_markup(reply_markup=None)
-    await context.bot.send_message(
-        chat_id=query.from_user.id,
-        text=(
+    await update.message.reply_text(
+        (
             "📝 *Composing your question...*\n\n"
             "Send your question now — you can send *multiple messages* "
             "(text, photos, documents).\n\n"
-            "When you're done, tap *\"✅ Send Question\"* below.\n"
+            "When you're done, tap *\"✅ Send Question\"* at the bottom.\n"
             "━━━━━━━━━━━━━━━━━━━━━━"
         ),
         parse_mode="Markdown",
@@ -213,21 +221,32 @@ async def start_composing(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def collect_student_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Collect messages while student is composing."""
     user_id = update.effective_user.id
+    msg = update.message
 
     # Teacher messages go to a different handler
     if user_id == TEACHER_ID:
         await handle_teacher_message(update, context)
         return
 
+    # Handle reply keyboard button presses
+    if msg.text == BTN_ASK:
+        await start_composing(update, context)
+        return
+    if msg.text == BTN_SEND:
+        await finish_composing_from_message(update, context)
+        return
+    if msg.text == BTN_CANCEL:
+        await cancel_composing_from_message(update, context)
+        return
+
     # If not composing, prompt them to use the button
     if not context.user_data.get("composing"):
-        await update.message.reply_text(
+        await msg.reply_text(
             "👋 To ask a question, tap the button below!",
             reply_markup=main_student_keyboard(),
         )
         return
 
-    msg = update.message
     part = {"type": "text", "text": "", "file_id": None}
 
     if msg.photo:
@@ -255,18 +274,14 @@ async def collect_student_message(update: Update, context: ContextTypes.DEFAULT_
     )
 
 
-async def finish_composing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def finish_composing_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Bundle all composed parts into one question and send to teacher."""
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-
+    user_id = update.effective_user.id
     parts = context.user_data.get("compose_parts", [])
 
     if not parts:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text="❌ You didn't send any content. Try again!",
+        await update.message.reply_text(
+            "❌ You didn't send any content. Try again!",
             reply_markup=main_student_keyboard(),
         )
         context.user_data.pop("composing", None)
@@ -295,15 +310,8 @@ async def finish_composing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("composing", None)
     context.user_data.pop("compose_parts", None)
 
-    # Confirm to student
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=(
+    await update.message.reply_text(
+        (
             f"✅ *Question #{q_id} sent anonymously!*\n\n"
             f"📎 {len(parts)} part(s) sent to your teacher.\n"
             "You'll receive a reply right here. 🔔"
@@ -316,22 +324,13 @@ async def finish_composing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_question_to_teacher(context, q_id, question_record)
 
 
-async def cancel_composing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cancel_composing_from_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancel the current question composition."""
-    query = update.callback_query
-    await query.answer()
-
     context.user_data.pop("composing", None)
     context.user_data.pop("compose_parts", None)
 
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    await context.bot.send_message(
-        chat_id=query.from_user.id,
-        text="❌ Question cancelled.",
+    await update.message.reply_text(
+        "❌ Question cancelled.",
         reply_markup=main_student_keyboard(),
     )
 
@@ -487,22 +486,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data_str = query.data
     user_id = query.from_user.id
-
-    # Student compose flow
-    if data_str == "ask_start":
-        if user_id == TEACHER_ID:
-            await query.answer("Teachers can't ask questions!", show_alert=True)
-            return
-        await start_composing(update, context)
-        return
-
-    if data_str == "ask_finish":
-        await finish_composing(update, context)
-        return
-
-    if data_str == "ask_cancel":
-        await cancel_composing(update, context)
-        return
 
     # Teacher-only actions below
     if user_id != TEACHER_ID:
