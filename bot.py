@@ -77,6 +77,23 @@ def count_pending(data: dict) -> int:
     )
 
 
+def get_question_preview(q: dict, max_len: int = 60) -> str:
+    """Extract a text preview from a question, handling both v1 and v2 formats."""
+    if "parts" in q:
+        # v2 format — list of parts
+        texts = [p["text"] for p in q["parts"] if p.get("text")]
+        preview = " ".join(texts)[:max_len]
+        if not preview:
+            media_count = sum(1 for p in q["parts"] if p["type"] != "text")
+            preview = f"[📎 {media_count} attachment(s)]"
+    else:
+        # v1 format — flat text/type fields
+        preview = (q.get("text", "") or "")[:max_len]
+        if not preview and q.get("type") != "text":
+            preview = f"[📎 {q.get('type', 'media')}]"
+    return preview or "[empty]"
+
+
 # --- Reply Keyboard Buttons (bottom of screen) ---
 BTN_ASK = "📝 Ask a Question"
 BTN_SEND = "✅ Send Question"
@@ -611,12 +628,7 @@ async def show_queue(source, context):
     lines = [f"📋 *Pending Questions ({len(pending)}):*\n"]
     for q in pending:
         icon = "⏳" if q["status"] == "pending" else "✍️"
-        # Build a preview from parts
-        texts = [p["text"] for p in q["parts"] if p["text"]]
-        preview = " ".join(texts)[:60]
-        if not preview:
-            media_count = sum(1 for p in q["parts"] if p["type"] != "text")
-            preview = f"[📎 {media_count} attachment(s)]"
+        preview = get_question_preview(q, 60)
         lines.append(f"{icon} *#{q['id']}* — {preview}")
 
     await context.bot.send_message(
@@ -628,8 +640,7 @@ async def show_queue(source, context):
     # Re-send each with action buttons
     for q in pending:
         kb = teacher_question_keyboard(q["id"])
-        texts = [p["text"] for p in q["parts"] if p["text"]]
-        preview = " ".join(texts)[:100] or "[📎 media]"
+        preview = get_question_preview(q, 100)
         await context.bot.send_message(
             chat_id=chat_id,
             text=f"❓ *Question #{q['id']}* ({q['timestamp']})\n\n{preview}",
