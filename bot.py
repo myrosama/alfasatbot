@@ -866,6 +866,14 @@ def main():
         collect_student_message,
     ))
 
+    # Error handler — suppress 409 Conflict (happens during redeploys)
+    async def error_handler(update, context):
+        if "Conflict" in str(context.error):
+            return  # Ignore — transient during deploys
+        logger.error(f"Unhandled error: {context.error}")
+
+    app.add_error_handler(error_handler)
+
     print("✅ Bot is running! Press Ctrl+C to stop.")
 
     # Ensure event loop exists (required for Python 3.12+ / Render)
